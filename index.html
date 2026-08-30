@@ -78,41 +78,50 @@
     let isLoading = false;
 
     // Запрос трендовых Shorts к YouTube API
-    async function fetchTrendShorts() {
-      if (isLoading) return;
-      isLoading = true;
+async function fetchTrendShorts() {
+  if (isLoading) return;
+  isLoading = true;
 
-      // Запрашиваем популярные короткие видео (Shorts)
-      let url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoDuration=short&chart=mostPopular&maxResults=10&key=${API_KEY}`;
-      if (nextPageToken) {
-        url += `&pageToken=${nextPageToken}`;
-      }
+  // Безопасный запрос самых популярных коротких видео
+  let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet&chart=mostPopular&maxResults=10&videoCategoryId=0&key=${API_KEY}`;
+  if (nextPageToken) {
+    url += `&pageToken=${nextPageToken}`;
+  }
 
-      try {
-        const res = await fetch(url);
-        const data = await res.json();
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
 
-        if (data.nextPageToken) {
-          nextPageToken = data.nextPageToken;
-        }
-
-        const newVideos = [];
-        data.items.forEach(item => {
-          const id = item.id.videoId;
-          // Проверяем, чтобы видео не повторялось
-          if (id && !seenVideoIds.has(id)) {
-            seenVideoIds.add(id);
-            newVideos.push(id);
-          }
-        });
-
-        appendVideosToFeed(newVideos);
-      } catch (e) {
-        console.error('Ошибка загрузки YouTube API:', e);
-      } finally {
-        isLoading = false;
-      }
+    // Проверка на ошибку от Google
+    if (data.error) {
+      console.error('Ошибка YouTube API:', data.error.message);
+      alert('Ошибка API: ' + data.error.message); // Выведет точную причину на экран!
+      return;
     }
+
+    if (data.nextPageToken) {
+      nextPageToken = data.nextPageToken;
+    }
+
+    const newVideos = [];
+    if (data.items) {
+      data.items.forEach(item => {
+        const id = item.id;
+        if (id && !seenVideoIds.has(id)) {
+          seenVideoIds.add(id);
+          newVideos.push(id);
+        }
+      });
+    }
+
+    appendVideosToFeed(newVideos);
+  } catch (e) {
+    console.error('Ошибка загрузки:', e);
+  } finally {
+    isLoading = false;
+  }
+}
+
 
     function appendVideosToFeed(newIds) {
       const feedContainer = document.getElementById('feed');
