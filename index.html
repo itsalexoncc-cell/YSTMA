@@ -145,7 +145,7 @@
         const slide = document.createElement('div');
         slide.className = 'swiper-slide';
         slide.innerHTML = `
-          <div class="player-container">
+          <div class="player-container" data-container="${index}">
             <div id="player-${index}"></div>
           </div>
           <div class="touch-overlay" data-index="${index}"></div>
