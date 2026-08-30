@@ -3,62 +3,79 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Shorts Trends Feed</title>
+  <title>Open Shorts</title>
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="https://www.youtube.com/iframe_api"></script>
-
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
-  <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
 
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body, .swiper { width: 100%; height: 100vh; background: #000; overflow: hidden; }
+    html, body {
+      width: 100%;
+      height: 100vh;
+      background: #000;
+      overflow: hidden;
+      font-family: -apple-system, sans-serif;
+    }
 
-    .swiper-slide {
+    #screen {
       position: relative;
       width: 100%;
       height: 100%;
       display: flex;
-      justify-content: center;
+      flex-direction: column;
+      justify-content: flex-end;
       align-items: center;
-      background: #000;
+      background-size: cover;
+      background-position: center;
+      background-color: #111;
     }
 
-    .player-container {
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-    }
-
-    iframe {
-      width: 100%;
-      height: 100%;
-      border: none;
-    }
-
-    .touch-overlay {
+    #overlay {
       position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      z-index: 10;
-      background: transparent;
+      inset: 0;
+      background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.1) 45%, rgba(0,0,0,0.1) 100%);
     }
 
-    .loader {
+    #content {
+      position: relative;
+      z-index: 2;
+      width: 100%;
+      padding: 24px 20px 40px;
+      text-align: center;
       color: #fff;
-      font-family: sans-serif;
+    }
+
+    #title {
       font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 18px;
+      line-height: 1.4;
+      max-height: 4.2em;
+      overflow: hidden;
+    }
+
+    #btn {
+      display: inline-block;
+      background: #fff;
+      color: #000;
+      font-size: 16px;
+      font-weight: 700;
+      padding: 14px 32px;
+      border-radius: 999px;
+    }
+
+    #status {
+      color: #aaa;
+      font-size: 15px;
     }
   </style>
 </head>
 <body>
 
-  <div class="swiper mySwiper">
-    <div class="swiper-wrapper" id="feed">
-      <div class="swiper-slide"><div class="loader">Загрузка трендов... 🔥</div></div>
+  <div id="screen">
+    <div id="overlay"></div>
+    <div id="content">
+      <div id="status">Загрузка трендов... 🔥</div>
     </div>
   </div>
 
@@ -69,200 +86,99 @@
 
     const API_KEY = 'AIzaSyDAdUwgT0fUEbUBHNTVBdGYKcUNlOLPNf0'; // 👈 ВСТАВЬ СВОЙ КЛЮЧ
 
-    // Буфер видео: сколько уникальных id держим "в запасе" вперёд
-    const MIN_BUFFER = 12;
+    let currentVideo = null; // { id, title, thumbnail }
 
-    let nextPageToken = '';
-    const seenVideoIds = new Set();
-    const videoIds = [];
-    const players = {};
-    const playerReady = {};   // ФИКС №1: отслеживаем готовность каждого плеера
-    let activeIndex = 0;      // ФИКС №1: актуальный индекс, обновляется сразу при свайпе
-    let swiper;
-    let isLoading = false;
-    let userHasInteracted = false;
+    // Грубая проверка длительности: считаем "шортсом" всё, что <= 60 сек.
+    function isShortDuration(iso8601) {
+      // Формат вида PT#M#S / PT#S / PT#H#M#S
+      const match = iso8601.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
+      if (!match) return false;
+      const hours = parseInt(match[1] || '0', 10);
+      const minutes = parseInt(match[2] || '0', 10);
+      const seconds = parseInt(match[3] || '0', 10);
+      const total = hours * 3600 + minutes * 60 + seconds;
+      return total > 0 && total <= 60;
+    }
 
-    async function fetchTrendShorts() {
-      if (isLoading) return;
-      isLoading = true;
+    async function fetchRandomShort() {
+      let pageToken = '';
+      let attempts = 0;
 
-      // ФИКС №2: убрали videoCategoryId=0 — это невалидная категория,
-      // она отдаёт крошечный фиксированный набор старых "безкатегорийных" видео,
-      // из-за чего казалось, что видео "всего 5" и новые не подгружаются.
-      let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,status&chart=mostPopular&maxResults=50&key=${API_KEY}`;
-      if (nextPageToken) url += `&pageToken=${nextPageToken}`;
+      while (attempts < 5) {
+        attempts++;
+        let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status&chart=mostPopular&maxResults=50&key=${API_KEY}`;
+        if (pageToken) url += `&pageToken=${pageToken}`;
 
-      try {
-        const res = await fetch(url);
-        const data = await res.json();
+        try {
+          const res = await fetch(url);
+          const data = await res.json();
 
-        if (data.error) {
-          console.error('Ошибка API:', data.error.message);
-          return;
-        }
+          if (data.error) {
+            console.error('Ошибка API:', data.error.message);
+            return null;
+          }
 
-        nextPageToken = data.nextPageToken || '';
-
-        const newVideos = [];
-        if (data.items) {
-          data.items.forEach(item => {
-            const id = item.id;
+          const shorts = (data.items || []).filter(item => {
             const embeddable = !item.status || item.status.embeddable !== false;
-            if (id && embeddable && !seenVideoIds.has(id)) {
-              seenVideoIds.add(id);
-              newVideos.push(id);
-            }
+            const duration = item.contentDetails && item.contentDetails.duration;
+            return embeddable && duration && isShortDuration(duration);
           });
-        }
 
-        appendVideosToFeed(newVideos);
-
-        // Если после этой страницы буфер всё ещё маленький и есть следующая
-        // страница — сразу подгружаем ещё, не дожидаясь приближения пользователя к концу.
-        if (nextPageToken && (videoIds.length - activeIndex) < MIN_BUFFER) {
-          isLoading = false;
-          fetchTrendShorts();
-          return;
-        }
-      } catch (e) {
-        console.error('Ошибка загрузки:', e);
-      } finally {
-        isLoading = false;
-      }
-    }
-
-    function appendVideosToFeed(newIds) {
-      const feedContainer = document.getElementById('feed');
-
-      if (videoIds.length === 0 && newIds.length > 0) {
-        feedContainer.innerHTML = '';
-      }
-
-      newIds.forEach(id => {
-        const index = videoIds.length;
-        videoIds.push(id);
-
-        const slide = document.createElement('div');
-        slide.className = 'swiper-slide';
-        slide.innerHTML = `
-          <div class="player-container" data-container="${index}">
-            <div id="player-${index}"></div>
-          </div>
-          <div class="touch-overlay" data-index="${index}"></div>
-        `;
-        feedContainer.appendChild(slide);
-      });
-
-      if (swiper) {
-        swiper.update();
-      } else if (videoIds.length > 0) {
-        initSwiper();
-      }
-    }
-
-    function onYouTubeIframeAPIReady() {
-      fetchTrendShorts();
-    }
-
-    function createPlayer(index) {
-      if (!players[index] && videoIds[index]) {
-        players[index] = new YT.Player(`player-${index}`, {
-          videoId: videoIds[index],
-          playerVars: {
-            'autoplay': 1,
-            'controls': 0,
-            'rel': 0,
-            'loop': 1,
-            'playsinline': 1,
-            'mute': 1
-          },
-          events: {
-            'onReady': () => {
-              playerReady[index] = true;
-              // ФИКС №1: если к моменту готовности слайд уже активен — играем сейчас.
-              if (activeIndex === index) {
-                playPlayer(index);
-              }
-            }
+          if (shorts.length > 0) {
+            const pick = shorts[Math.floor(Math.random() * shorts.length)];
+            return {
+              id: pick.id,
+              title: pick.snippet.title,
+              thumbnail:
+                (pick.snippet.thumbnails.maxres || pick.snippet.thumbnails.high || pick.snippet.thumbnails.medium).url
+            };
           }
-        });
+
+          pageToken = data.nextPageToken;
+          if (!pageToken) return null;
+        } catch (e) {
+          console.error('Ошибка загрузки:', e);
+          return null;
+        }
+      }
+      return null;
+    }
+
+    function renderVideo(video) {
+      const screen = document.getElementById('screen');
+      const content = document.getElementById('content');
+
+      screen.style.backgroundImage = `url('${video.thumbnail}')`;
+      content.innerHTML = `
+        <div id="title">${video.title}</div>
+        <div id="btn">Смотреть в Shorts ▶</div>
+      `;
+    }
+
+    function renderError() {
+      document.getElementById('content').innerHTML =
+        '<div id="status">Не удалось найти шортс. Попробуйте открыть заново.</div>';
+    }
+
+    async function init() {
+      currentVideo = await fetchRandomShort();
+      if (currentVideo) {
+        renderVideo(currentVideo);
+      } else {
+        renderError();
       }
     }
 
-    function initSwiper() {
-      swiper = new Swiper('.mySwiper', {
-        direction: 'vertical',
-        mousewheel: true,
-        slidesPerView: 1,
-        on: {
-          init: function () {
-            activeIndex = 0;
-            createPlayer(0);
-          },
-          slideChange: function () {
-            const current = this.activeIndex;
-            activeIndex = current; // ФИКС №1: обновляем ДО всего остального
+    // Открываем официальные YouTube Shorts. openLink() у Telegram
+    // работает только как реакция на настоящее касание пользователя,
+    // поэтому вешаем обработчик на клик по экрану, а не вызываем сразу.
+    document.getElementById('screen').addEventListener('click', () => {
+      if (!currentVideo) return;
+      const url = `https://www.youtube.com/shorts/${currentVideo.id}`;
+      tg.openLink(url);
+    });
 
-            if (videoIds.length - current < 3) {
-              fetchTrendShorts();
-            }
-
-            createPlayer(current + 1);
-
-            Object.keys(players).forEach(idx => {
-              if (Number(idx) !== current && players[idx] && players[idx].pauseVideo) {
-                players[idx].pauseVideo();
-              }
-            });
-
-            playPlayer(current);
-          }
-        }
-      });
-
-      document.addEventListener('click', (e) => {
-        userHasInteracted = true;
-        if (e.target.classList.contains('touch-overlay')) {
-          const idx = e.target.getAttribute('data-index');
-          const player = players[idx];
-          if (player && player.getPlayerState) {
-            if (player.isMuted()) {
-              player.unMute();
-            } else {
-              const state = player.getPlayerState();
-              if (state === YT.PlayerState.PLAYING) {
-                player.pauseVideo();
-              } else {
-                player.playVideo();
-              }
-            }
-          }
-        }
-      });
-    }
-
-    function playPlayer(index) {
-      if (!players[index]) {
-        createPlayer(index);
-        return; // запустится само в onReady, когда activeIndex совпадёт
-      }
-
-      // ФИКС №1: если плеер ещё не готов — ничего не теряем.
-      // onReady сам вызовет playPlayer(index), т.к. activeIndex уже обновлён.
-      if (!playerReady[index]) {
-        return;
-      }
-
-      const player = players[index];
-      if (player && player.playVideo) {
-        if (userHasInteracted) {
-          player.unMute();
-        } else {
-          player.mute();
-        }
-        player.playVideo();
-      }
-    }
+    init();
   </script>
 </body>
 </html>
