@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Shorts Feed</title>
+  <title>Shorts Trends Feed</title>
   
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://www.youtube.com/iframe_api"></script>
@@ -28,7 +28,7 @@
     .player-container {
       width: 100%;
       height: 100%;
-      pointer-events: none; /* Пропускает клики сквозь iframe */
+      pointer-events: none;
     }
 
     iframe {
@@ -37,7 +37,6 @@
       border: none;
     }
 
-    /* Прозрачный слой для перехвата свайпов и тапов */
     .touch-overlay {
       position: absolute;
       top: 0;
@@ -47,12 +46,20 @@
       z-index: 10;
       background: transparent;
     }
+
+    .loader {
+      color: #fff;
+      font-family: sans-serif;
+      font-size: 16px;
+    }
   </style>
 </head>
 <body>
 
   <div class="swiper mySwiper">
-    <div class="swiper-wrapper" id="feed"></div>
+    <div class="swiper-wrapper" id="feed">
+      <div class="swiper-slide"><div class="loader">Загрузка трендов... 🔥</div></div>
+    </div>
   </div>
 
   <script>
@@ -60,48 +67,108 @@
     tg.expand();
     tg.ready();
 
-    // Список ID твоих Shorts
-    const videoIds = [
-      'dQw4w9WgXcQ',
-      '3JZ_D3ELwOQ',
-      'L_LUpnjgPso'
-    ];
-
+    // 🔑 ВСТАВЬ СЮДА СВОЙ YOUTUBE API KEY
+    const API_KEY = 'YOUR_YOUTUBE_API_KEY_HERE'; 
+    
+    let nextPageToken = '';
+    const seenVideoIds = new Set(); // Чтобы видео НЕ повторялись
+    const videoIds = [];
     const players = {};
-    const feedContainer = document.getElementById('feed');
-
-    // Рендерим слайды
-    videoIds.forEach((id, index) => {
-      const slide = document.createElement('div');
-      slide.className = 'swiper-slide';
-      slide.innerHTML = `
-        <div class="player-container">
-          <div id="player-${index}"></div>
-        </div>
-        <div class="touch-overlay" data-index="${index}"></div>
-      `;
-      feedContainer.appendChild(slide);
-    });
-
     let swiper;
+    let isLoading = false;
 
-    // Инициализация YouTube API
+    // Запрос трендовых Shorts к YouTube API
+    async function fetchTrendShorts() {
+      if (isLoading) return;
+      isLoading = true;
+
+      // Запрашиваем популярные короткие видео (Shorts)
+      let url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoDuration=short&chart=mostPopular&maxResults=10&key=${API_KEY}`;
+      if (nextPageToken) {
+        url += `&pageToken=${nextPageToken}`;
+      }
+
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data.nextPageToken) {
+          nextPageToken = data.nextPageToken;
+        }
+
+        const newVideos = [];
+        data.items.forEach(item => {
+          const id = item.id.videoId;
+          // Проверяем, чтобы видео не повторялось
+          if (id && !seenVideoIds.has(id)) {
+            seenVideoIds.add(id);
+            newVideos.push(id);
+          }
+        });
+
+        appendVideosToFeed(newVideos);
+      } catch (e) {
+        console.error('Ошибка загрузки YouTube API:', e);
+      } finally {
+        isLoading = false;
+      }
+    }
+
+    function appendVideosToFeed(newIds) {
+      const feedContainer = document.getElementById('feed');
+
+      // Убираем лоадер при первой загрузке
+      if (videoIds.length === 0 && newIds.length > 0) {
+        feedContainer.innerHTML = '';
+      }
+
+      newIds.forEach(id => {
+        const index = videoIds.length;
+        videoIds.push(id);
+
+        const slide = document.createElement('div');
+        slide.className = 'swiper-slide';
+        slide.innerHTML = `
+          <div class="player-container">
+            <div id="player-${index}"></div>
+          </div>
+          <div class="touch-overlay" data-index="${index}"></div>
+        `;
+        feedContainer.appendChild(slide);
+      });
+
+      if (swiper) {
+        swiper.update(); // Обновляем Swiper
+      } else {
+        initSwiper();
+      }
+    }
+
     function onYouTubeIframeAPIReady() {
-      videoIds.forEach((id, index) => {
+      fetchTrendShorts();
+    }
+
+    function createPlayer(index) {
+      if (!players[index] && videoIds[index]) {
         players[index] = new YT.Player(`player-${index}`, {
-          videoId: id,
+          videoId: videoIds[index],
           playerVars: {
-            'autoplay': 0,
+            'autoplay': 1,
             'controls': 0,
             'rel': 0,
             'loop': 1,
-            'playsinline': 1
+            'playsinline': 1,
+            'mute': 1
+          },
+          events: {
+            'onReady': (e) => {
+              if (swiper && swiper.activeIndex === index) {
+                e.target.playVideo();
+              }
+            }
           }
         });
-      });
-
-      // Инициализируем Swiper только после готовности плееров
-      initSwiper();
+      }
     }
 
     function initSwiper() {
@@ -111,27 +178,45 @@
         slidesPerView: 1,
         on: {
           init: function () {
-            // Запускаем первое видео
-            setTimeout(() => playVideo(0), 1000);
+            createPlayer(0);
           },
           slideChange: function () {
-            // Ставим на паузу все и запускаем активное
+            const current = this.activeIndex;
+
+            // Если подходим к концу (осталось 3 видео) — качаем еще!
+            if (current >= videoIds.length - 3) {
+              fetchTrendShorts();
+            }
+
+            // Предзагрузка следующего плеера
+            createPlayer(current + 1);
+
+            // Пауза всех остальным
             Object.keys(players).forEach(idx => {
               if (players[idx] && players[idx].pauseVideo) {
                 players[idx].pauseVideo();
               }
             });
-            playVideo(this.activeIndex);
+
+            // Старт текущего
+            if (!players[current]) {
+              createPlayer(current);
+            } else {
+              players[current].unMute();
+              players[current].playVideo();
+            }
           }
         }
       });
 
-      // Нажатие на экран — пауза / плей
-      document.querySelectorAll('.touch-overlay').forEach(overlay => {
-        overlay.addEventListener('click', (e) => {
+      // Пауза / Плей + Включение звука при тапе
+      document.addEventListener('click', (e) => {
+        if (e.target.classList.contains('touch-overlay')) {
           const idx = e.target.getAttribute('data-index');
           const player = players[idx];
           if (player && player.getPlayerState) {
+            if (player.isMuted()) player.unMute();
+
             const state = player.getPlayerState();
             if (state === YT.PlayerState.PLAYING) {
               player.pauseVideo();
@@ -139,14 +224,8 @@
               player.playVideo();
             }
           }
-        });
+        }
       });
-    }
-
-    function playVideo(index) {
-      if (players[index] && players[index].playVideo) {
-        players[index].playVideo();
-      }
     }
   </script>
 </body>
