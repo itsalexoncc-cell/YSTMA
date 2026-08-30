@@ -58,7 +58,7 @@
 
   <div class="swiper mySwiper">
     <div class="swiper-wrapper" id="feed">
-      <div class="swiper-slide"><div class="loader">Загрузка видео... 🔄</div></div>
+      <div class="swiper-slide"><div class="loader">Загрузка трендов... 🔥</div></div>
     </div>
   </div>
 
@@ -67,66 +67,56 @@
     tg.expand();
     tg.ready();
 
-    // 🔑 ВСТАВЬ СЮДА СВОЙ YOUTUBE API KEY
-    const API_KEY = 'AIzaSyDAdUwgT0fUEbUBHNTVBdGYKcUNlOLPNf0'; 
+    const API_KEY = 'AIzaSyDAdUwgT0fUEbUBHNTVBdGYKcUNlOLPNf0'; // 👈 ВСТАВЬ СВОЙ КЛЮЧ
     
     let nextPageToken = '';
-    const seenVideoIds = new Set(); // Чтобы видео НЕ повторялись
+    const seenVideoIds = new Set();
     const videoIds = [];
     const players = {};
     let swiper;
     let isLoading = false;
+    let userHasInteracted = false; // Флаг: взаимодействовал ли пользователь с экраном
 
-    // Запрос трендовых Shorts к YouTube API
-async function fetchTrendShorts() {
-  if (isLoading) return;
-  isLoading = true;
+    async function fetchTrendShorts() {
+      if (isLoading) return;
+      isLoading = true;
 
-  // Безопасный запрос самых популярных коротких видео
-  let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet&chart=mostPopular&maxResults=10&videoCategoryId=0&key=${API_KEY}`;
-  if (nextPageToken) {
-    url += `&pageToken=${nextPageToken}`;
-  }
+      let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet&chart=mostPopular&maxResults=10&videoCategoryId=0&key=${API_KEY}`;
+      if (nextPageToken) url += `&pageToken=${nextPageToken}`;
 
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
 
-    // Проверка на ошибку от Google
-    if (data.error) {
-      console.error('Ошибка YouTube API:', data.error.message);
-      alert('Ошибка API: ' + data.error.message); // Выведет точную причину на экран!
-      return;
-    }
-
-    if (data.nextPageToken) {
-      nextPageToken = data.nextPageToken;
-    }
-
-    const newVideos = [];
-    if (data.items) {
-      data.items.forEach(item => {
-        const id = item.id;
-        if (id && !seenVideoIds.has(id)) {
-          seenVideoIds.add(id);
-          newVideos.push(id);
+        if (data.error) {
+          alert('Ошибка API: ' + data.error.message);
+          return;
         }
-      });
+
+        if (data.nextPageToken) nextPageToken = data.nextPageToken;
+
+        const newVideos = [];
+        if (data.items) {
+          data.items.forEach(item => {
+            const id = item.id;
+            if (id && !seenVideoIds.has(id)) {
+              seenVideoIds.add(id);
+              newVideos.push(id);
+            }
+          });
+        }
+
+        appendVideosToFeed(newVideos);
+      } catch (e) {
+        console.error('Ошибка загрузки:', e);
+      } finally {
+        isLoading = false;
+      }
     }
-
-    appendVideosToFeed(newVideos);
-  } catch (e) {
-    console.error('Ошибка загрузки:', e);
-  } finally {
-    isLoading = false;
-  }
-}
-
 
     function appendVideosToFeed(newIds) {
       const feedContainer = document.getElementById('feed');
 
-      // Убираем лоадер при первой загрузке
       if (videoIds.length === 0 && newIds.length > 0) {
         feedContainer.innerHTML = '';
       }
@@ -147,7 +137,7 @@ async function fetchTrendShorts() {
       });
 
       if (swiper) {
-        swiper.update(); // Обновляем Swiper
+        swiper.update();
       } else {
         initSwiper();
       }
@@ -167,12 +157,12 @@ async function fetchTrendShorts() {
             'rel': 0,
             'loop': 1,
             'playsinline': 1,
-            'mute': 1
+            'mute': 1 // Обязательный запуск MUTE для обхода блокировки браузера! 🔇
           },
           events: {
             'onReady': (e) => {
               if (swiper && swiper.activeIndex === index) {
-                e.target.playVideo();
+                playPlayer(index);
               }
             }
           }
@@ -192,49 +182,65 @@ async function fetchTrendShorts() {
           slideChange: function () {
             const current = this.activeIndex;
 
-            // Если подходим к концу (осталось 3 видео) — качаем еще!
+            // Качаем новые видео при подходе к концу
             if (current >= videoIds.length - 3) {
               fetchTrendShorts();
             }
 
-            // Предзагрузка следующего плеера
+            // Создаем следующий плеер заранее
             createPlayer(current + 1);
 
-            // Пауза всех остальным
+            // Ставим на паузу ВСЕ остальные плееры
             Object.keys(players).forEach(idx => {
               if (players[idx] && players[idx].pauseVideo) {
                 players[idx].pauseVideo();
               }
             });
 
-            // Старт текущего
-            if (!players[current]) {
-              createPlayer(current);
-            } else {
-              players[current].unMute();
-              players[current].playVideo();
-            }
+            // Запускаем текущее видео АВТОМАТИЧЕСКИ
+            playPlayer(current);
           }
         }
       });
 
-      // Пауза / Плей + Включение звука при тапе
+      // Первый же клик/свайп разблокирует звук
       document.addEventListener('click', (e) => {
+        userHasInteracted = true;
         if (e.target.classList.contains('touch-overlay')) {
           const idx = e.target.getAttribute('data-index');
           const player = players[idx];
           if (player && player.getPlayerState) {
-            if (player.isMuted()) player.unMute();
-
-            const state = player.getPlayerState();
-            if (state === YT.PlayerState.PLAYING) {
-              player.pauseVideo();
+            if (player.isMuted()) {
+              player.unMute();
             } else {
-              player.playVideo();
+              const state = player.getPlayerState();
+              if (state === YT.PlayerState.PLAYING) {
+                player.pauseVideo();
+              } else {
+                player.playVideo();
+              }
             }
           }
         }
       });
+    }
+
+    function playPlayer(index) {
+      if (!players[index]) {
+        createPlayer(index);
+        return;
+      }
+      
+      const player = players[index];
+      if (player && player.playVideo) {
+        // Если пользователь уже хотя бы 1 раз кликал на экран — включаем звук!
+        if (userHasInteracted) {
+          player.unMute();
+        } else {
+          player.mute();
+        }
+        player.playVideo();
+      }
     }
   </script>
 </body>
