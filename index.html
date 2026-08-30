@@ -5,73 +5,149 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Shorts Feed</title>
   
-  <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://www.youtube.com/iframe_api"></script>
   
-  <!-- Swiper.js для вертикальных свайпов -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
 
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body, .swiper { width: 100%; height: 100vh; background: #000; overflow: hidden; }
+    
     .swiper-slide {
+      position: relative;
+      width: 100%;
+      height: 100%;
       display: flex;
       justify-content: center;
       align-items: center;
       background: #000;
     }
+
+    .player-container {
+      width: 100%;
+      height: 100%;
+      pointer-events: none; /* Пропускает клики сквозь iframe */
+    }
+
     iframe {
       width: 100%;
       height: 100%;
       border: none;
+    }
+
+    /* Прозрачный слой для перехвата свайпов и тапов */
+    .touch-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      background: transparent;
     }
   </style>
 </head>
 <body>
 
   <div class="swiper mySwiper">
-    <div class="swiper-wrapper" id="feed">
-      <!-- Слайды будут генерироваться через JS -->
-    </div>
+    <div class="swiper-wrapper" id="feed"></div>
   </div>
 
   <script>
-    // Инициализация Telegram Mini App
     const tg = window.Telegram.WebApp;
-    tg.expand(); // Разворачиваем на весь экран
+    tg.expand();
     tg.ready();
 
-    // Список ID видео YouTube Shorts
-    const shortsList = [
-      'dQw4w9WgXcQ', // Замени на ID своих Shorts
+    // Список ID твоих Shorts
+    const videoIds = [
+      'dQw4w9WgXcQ',
       '3JZ_D3ELwOQ',
       'L_LUpnjgPso'
     ];
 
+    const players = {};
     const feedContainer = document.getElementById('feed');
 
     // Рендерим слайды
-    shortsList.forEach(id => {
+    videoIds.forEach((id, index) => {
       const slide = document.createElement('div');
       slide.className = 'swiper-slide';
       slide.innerHTML = `
-        <iframe 
-          src="https://www.youtube.com/embed/${id}?enablejsapi=1&autoplay=0&controls=1&rel=0&loop=1" 
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-          allowfullscreen>
-        </iframe>
+        <div class="player-container">
+          <div id="player-${index}"></div>
+        </div>
+        <div class="touch-overlay" data-index="${index}"></div>
       `;
       feedContainer.appendChild(slide);
     });
 
-    // Настройка свайпера (вертикальная лента)
-    const swiper = new Swiper('.mySwiper', {
-      direction: 'vertical',
-      mousewheel: true,
-      spaceBetween: 0,
-      slidesPerView: 1,
-    });
+    let swiper;
+
+    // Инициализация YouTube API
+    function onYouTubeIframeAPIReady() {
+      videoIds.forEach((id, index) => {
+        players[index] = new YT.Player(`player-${index}`, {
+          videoId: id,
+          playerVars: {
+            'autoplay': 0,
+            'controls': 0,
+            'rel': 0,
+            'loop': 1,
+            'playsinline': 1
+          }
+        });
+      });
+
+      // Инициализируем Swiper только после готовности плееров
+      initSwiper();
+    }
+
+    function initSwiper() {
+      swiper = new Swiper('.mySwiper', {
+        direction: 'vertical',
+        mousewheel: true,
+        slidesPerView: 1,
+        on: {
+          init: function () {
+            // Запускаем первое видео
+            setTimeout(() => playVideo(0), 1000);
+          },
+          slideChange: function () {
+            // Ставим на паузу все и запускаем активное
+            Object.keys(players).forEach(idx => {
+              if (players[idx] && players[idx].pauseVideo) {
+                players[idx].pauseVideo();
+              }
+            });
+            playVideo(this.activeIndex);
+          }
+        }
+      });
+
+      // Нажатие на экран — пауза / плей
+      document.querySelectorAll('.touch-overlay').forEach(overlay => {
+        overlay.addEventListener('click', (e) => {
+          const idx = e.target.getAttribute('data-index');
+          const player = players[idx];
+          if (player && player.getPlayerState) {
+            const state = player.getPlayerState();
+            if (state === YT.PlayerState.PLAYING) {
+              player.pauseVideo();
+            } else {
+              player.playVideo();
+            }
+          }
+        });
+      });
+    }
+
+    function playVideo(index) {
+      if (players[index] && players[index].playVideo) {
+        players[index].playVideo();
+      }
+    }
   </script>
 </body>
 </html>
