@@ -89,7 +89,7 @@
       // ФИКС №2: убрали videoCategoryId=0 — это невалидная категория,
       // она отдаёт крошечный фиксированный набор старых "безкатегорийных" видео,
       // из-за чего казалось, что видео "всего 5" и новые не подгружаются.
-      let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet&chart=mostPopular&maxResults=50&key=${API_KEY}`;
+      let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,status&chart=mostPopular&maxResults=50&key=${API_KEY}`;
       if (nextPageToken) url += `&pageToken=${nextPageToken}`;
 
       try {
@@ -107,7 +107,8 @@
         if (data.items) {
           data.items.forEach(item => {
             const id = item.id;
-            if (id && !seenVideoIds.has(id)) {
+            const embeddable = !item.status || item.status.embeddable !== false;
+            if (id && embeddable && !seenVideoIds.has(id)) {
               seenVideoIds.add(id);
               newVideos.push(id);
             }
