@@ -4,17 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Shorts Trends Feed</title>
-  
+
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://www.youtube.com/iframe_api"></script>
-  
+
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
 
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body, .swiper { width: 100%; height: 100vh; background: #000; overflow: hidden; }
-    
+
     .swiper-slide {
       position: relative;
       width: 100%;
@@ -68,20 +68,28 @@
     tg.ready();
 
     const API_KEY = 'AIzaSyDAdUwgT0fUEbUBHNTVBdGYKcUNlOLPNf0'; // 👈 ВСТАВЬ СВОЙ КЛЮЧ
-    
+
+    // Буфер видео: сколько уникальных id держим "в запасе" вперёд
+    const MIN_BUFFER = 12;
+
     let nextPageToken = '';
     const seenVideoIds = new Set();
     const videoIds = [];
     const players = {};
+    const playerReady = {};   // ФИКС №1: отслеживаем готовность каждого плеера
+    let activeIndex = 0;      // ФИКС №1: актуальный индекс, обновляется сразу при свайпе
     let swiper;
     let isLoading = false;
-    let userHasInteracted = false; // Флаг: взаимодействовал ли пользователь с экраном
+    let userHasInteracted = false;
 
     async function fetchTrendShorts() {
       if (isLoading) return;
       isLoading = true;
 
-      let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet&chart=mostPopular&maxResults=10&videoCategoryId=0&key=${API_KEY}`;
+      // ФИКС №2: убрали videoCategoryId=0 — это невалидная категория,
+      // она отдаёт крошечный фиксированный набор старых "безкатегорийных" видео,
+      // из-за чего казалось, что видео "всего 5" и новые не подгружаются.
+      let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet&chart=mostPopular&maxResults=50&key=${API_KEY}`;
       if (nextPageToken) url += `&pageToken=${nextPageToken}`;
 
       try {
@@ -89,11 +97,11 @@
         const data = await res.json();
 
         if (data.error) {
-          alert('Ошибка API: ' + data.error.message);
+          console.error('Ошибка API:', data.error.message);
           return;
         }
 
-        if (data.nextPageToken) nextPageToken = data.nextPageToken;
+        nextPageToken = data.nextPageToken || '';
 
         const newVideos = [];
         if (data.items) {
@@ -107,6 +115,14 @@
         }
 
         appendVideosToFeed(newVideos);
+
+        // Если после этой страницы буфер всё ещё маленький и есть следующая
+        // страница — сразу подгружаем ещё, не дожидаясь приближения пользователя к концу.
+        if (nextPageToken && (videoIds.length - activeIndex) < MIN_BUFFER) {
+          isLoading = false;
+          fetchTrendShorts();
+          return;
+        }
       } catch (e) {
         console.error('Ошибка загрузки:', e);
       } finally {
@@ -138,7 +154,7 @@
 
       if (swiper) {
         swiper.update();
-      } else {
+      } else if (videoIds.length > 0) {
         initSwiper();
       }
     }
@@ -157,11 +173,13 @@
             'rel': 0,
             'loop': 1,
             'playsinline': 1,
-            'mute': 1 // Обязательный запуск MUTE для обхода блокировки браузера! 🔇
+            'mute': 1
           },
           events: {
-            'onReady': (e) => {
-              if (swiper && swiper.activeIndex === index) {
+            'onReady': () => {
+              playerReady[index] = true;
+              // ФИКС №1: если к моменту готовности слайд уже активен — играем сейчас.
+              if (activeIndex === index) {
                 playPlayer(index);
               }
             }
@@ -177,33 +195,30 @@
         slidesPerView: 1,
         on: {
           init: function () {
+            activeIndex = 0;
             createPlayer(0);
           },
           slideChange: function () {
             const current = this.activeIndex;
+            activeIndex = current; // ФИКС №1: обновляем ДО всего остального
 
-            // Качаем новые видео при подходе к концу
-            if (current >= videoIds.length - 3) {
+            if (videoIds.length - current < 3) {
               fetchTrendShorts();
             }
 
-            // Создаем следующий плеер заранее
             createPlayer(current + 1);
 
-            // Ставим на паузу ВСЕ остальные плееры
             Object.keys(players).forEach(idx => {
-              if (players[idx] && players[idx].pauseVideo) {
+              if (Number(idx) !== current && players[idx] && players[idx].pauseVideo) {
                 players[idx].pauseVideo();
               }
             });
 
-            // Запускаем текущее видео АВТОМАТИЧЕСКИ
             playPlayer(current);
           }
         }
       });
 
-      // Первый же клик/свайп разблокирует звук
       document.addEventListener('click', (e) => {
         userHasInteracted = true;
         if (e.target.classList.contains('touch-overlay')) {
@@ -228,12 +243,17 @@
     function playPlayer(index) {
       if (!players[index]) {
         createPlayer(index);
+        return; // запустится само в onReady, когда activeIndex совпадёт
+      }
+
+      // ФИКС №1: если плеер ещё не готов — ничего не теряем.
+      // onReady сам вызовет playPlayer(index), т.к. activeIndex уже обновлён.
+      if (!playerReady[index]) {
         return;
       }
-      
+
       const player = players[index];
       if (player && player.playVideo) {
-        // Если пользователь уже хотя бы 1 раз кликал на экран — включаем звук!
         if (userHasInteracted) {
           player.unMute();
         } else {
